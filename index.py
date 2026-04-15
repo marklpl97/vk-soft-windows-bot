@@ -1,79 +1,57 @@
-import asyncio
 import os
-from dotenv import load_dotenv
-import re
-from vkbottle.bot import Bot, Message
-from vkbottle import Keyboard, KeyboardButtonColor, Text
+from flask import Flask, request, jsonify
+import requests
 
-# Загружаем переменные из .env
-load_dotenv()
+app = Flask(__name__)
 
-# Токен
-TOKEN = os.getenv("VK_TOKEN")
+# === НАСТРОЙКИ (берём из переменных окружения Bothost) ===
+VK_TOKEN = os.environ.get("VK_TOKEN")
+CONFIRMATION_CODE = os.environ.get("VK_CONFIRMATION_CODE")
+CALC_URL = os.environ.get("CALC_URL")
+CONTACTS = os.environ.get("CONTACTS")
 
-# Ссылка на калькулятор
-CALC_URL = os.getenv("CALC_URL", "https://ссылка_по_умолчанию")  # второй аргумент — значение по умолчанию
-CONTACTS = os.getenv("CONTACTS", "📞 Контакты не указаны")
+# === ОБРАБОТКА СООБЩЕНИЙ ===
+def send_message(user_id, text, keyboard=None):
+    """Отправляет сообщение пользователю"""
+    payload = {
+        "user_id": user_id,
+        "message": text,
+        "access_token": VK_TOKEN,
+        "v": "5.199",
+        "random_id": 0
+    }
+    if keyboard:
+        payload["keyboard"] = keyboard
+    requests.post("https://api.vk.com/method/messages.send", data=payload)
 
+@app.route("/", methods=["POST"])
+def handle_webhook():
+    data = request.json
+    # Проверка типа уведомления от ВК
+    if data.get("type") == "confirmation":
+        # Отвечаем кодом подтверждения
+        return CONFIRMATION_CODE
+    elif data.get("type") == "message_new":
+        message = data["object"]["message"]
+        user_id = message["from_id"]
+        text = message["text"].lower().strip()
 
-bot = Bot(token=TOKEN)
-
-def get_keyboard():
-    keyboard = Keyboard()
-    keyboard.add(Text("📐 Рассчитать стоимость"), color=KeyboardButtonColor.POSITIVE)
-    keyboard.add(Text("📅 Записаться на замер"), color=KeyboardButtonColor.PRIMARY)
-    return keyboard
-
-def is_phone_number(text):
-    """Проверяет, похоже ли сообщение на номер телефона (10-11 цифр)."""
-    # Убираем все нецифровые символы (пробелы, дефисы, скобки, плюс)
-    digits = re.sub(r'\D', '', text)
-    # Если осталось 10 или 11 цифр — считаем номером телефона
-    return len(digits) in [10, 11]
-
-@bot.on.message()
-async def handle_message(message: Message):
-    text = message.text.lower()
-    original_text = message.text  # сохраняем исходный текст для проверки номера
-    
-    # Проверяем, не отправил ли пользователь номер телефона
-    if is_phone_number(original_text):
-        await message.answer(
-            "✅ Мы перезвоним Вам в ближайшее время.\n"
-            "Спасибо, что обратились к нам! 🌿"
-        )
-        return
-    
-    # Обычные команды
-    if text in ["привет", "начать", "start"]:
-        await message.answer(
-            "Добрый день! 👋\n\n"
-            "Я бот компании Территория комфорта. Мы производим для вас мягкие окна.\n"
-            "Выберите, что вас интересует: Рассчитать стоимость или Записаться на замер",
-            keyboard=get_keyboard()
-        )
-    
-    elif "рассчитать стоимость" in text:
-        await message.answer(
-            f"📐 Для расчёта стоимости мягких окон перейдите по ссылке:\n{CALC_URL}\n\n"
-            "Выберите город, плёнку, количество окон, крепёж и введите размеры."
-        )
-    
-    elif "записаться на замер" in text:
-        await message.answer(
-            f"📞 Для записи на замер свяжитесь с нами:\n\n{CONTACTS}\n\n"
-            "Или напишите номер телефона и мы перезвоним вам в ближайшее время."
-        )
-    
-    else:
-        await message.answer(
-            "Извините, я не понимаю эту команду.\n"
-            "Напишите 'Привет' или 'Начать', чтобы увидеть меню.\n\n"
-        )
+        # Логика ответа
+        if text in ["привет", "начать", "start"]:
+            keyboard = {
+                "buttons": [
+                    [{"action": {"type": "text", "label": "📐 Рассчитать стоимость"}, "color": "positive"}],
+                    [{"action": {"type": "text", "label": "📅 Записаться на замер"}, "color": "primary"}]
+                ]
+            }
+            send_message(user_id, "Добрый день! 👋\n\nВыберите, что вас интересует:", keyboard=keyboard)
+        elif "рассчитать стоимость" in text:
+            send_message(user_id, f"📐 Ссылка на калькулятор:\n{CALC_URL}")
+        elif "записаться на замер" in text:
+            send_message(user_id, f"📞 Наши контакты:\n{CONTACTS}")
+        else:
+            send_message(user_id, "Напишите 'Привет' или 'Начать'")
+    return "ok"
 
 if __name__ == "__main__":
-    print("Бот запущен...")
-    try:
-        bot.run_forever()
-    except Exception as e:
-        print(f"Ошибка: {e}")
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
